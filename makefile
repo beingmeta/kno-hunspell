@@ -4,10 +4,8 @@ KNOBUILD          = knobuild
 prefix		::= $(shell ${KNOCONFIG} prefix)
 libsuffix	::= $(shell ${KNOCONFIG} libsuffix)
 KNO_CFLAGS	::= -I. -fPIC -Wno-multichar $(shell ${KNOCONFIG} cflags)
-KNO_LDFLAGS	::= -fPIC $(shell ${KNOCONFIG} ldflags)
+KNO_LIBFLAGS	::= -fPIC $(shell ${KNOCONFIG} ldflags)
 KNO_LIBS	::= $(shell ${KNOCONFIG} libs)
-CFLAGS		::= ${CFLAGS} ${KNO_CFLAGS}
-LDFLAGS		::= ${LDFLAGS} ${KNO_LDFLAGS}
 DATADIR		::= $(DESTDIR)$(shell ${KNOCONFIG} data)
 CMODULES	::= $(DESTDIR)$(shell ${KNOCONFIG} cmodules)
 LIBS		::= $(shell ${KNOCONFIG} libs)
@@ -43,6 +41,13 @@ APKREPO         ::= $(shell ${KNOBUILD} getbuildopt APKREPO /srv/repo/kno/apk)
 APK_ARCH_DIR      = ${APKREPO}/staging/${ARCH}
 RPMDIR		  = dist
 
+INIT_CFLAGS        ::= ${CFLAGS}
+INIT_LIBFLAGS      ::= ${LDFLAGS}
+HUNSPELL_CFLAGS    ::= $(shell pkg-config --cflags hunspell 2> /dev/null || echo) 
+HUNSPELL_LIBFLAGS  ::= $(shell pkg-config --libs hunspell 2> /dev/null || echo) 
+XCFLAGS	  	     = ${INIT_CFLAGS} $(KNO_CFLAGS} ${HUNSPELL_CFLAGS}
+XLIBFLAGS	     = ${INIT_LIBFLAGS} $(KNO_LIBFLAGS} ${HUNSPELL_LIBFLAGS}
+
 %.o: %.c
 	@$(CC) $(CFLAGS) -D_FILEINFO="\"$(shell u8_fileinfo ./$< $(dirname $(pwd))/)\"" -o $@ -c $<
 	@$(MSG) CC $@ $<
@@ -50,13 +55,13 @@ RPMDIR		  = dist
 default build: ${PKG_NAME}.${libsuffix}
 
 hunspell.so: hunspell.c makefile
-	@$(MKSO) $(CFLAGS) -o $@ hunspell.c -lhunspell
-	@$(MSG) MKSO  $@ $<
+	@$(MKSO) $(XCFLAGS) -o $@ hunspell.c -lhunspell
+	@$(MSG) MKSO  $@ $< ${XLIBFLAGS}
 	@ln -sf $(@F) $(@D)/$(@F).${KNO_MAJOR}
 hunspell.dylib: hunspell.c
 	@$(MACLIBTOOL) -install_name \
 		`basename $(@F) .dylib`.${KNO_MAJOR}.dylib \
-		${CFLAGS} -o $@ $(DYLIB_FLAGS) \
+		${CFLAGS} -o $@ $(DYLIB_FLAGS) ${XLIBFLAGS} \
 		hunspell.c
 	@$(MSG) MACLIBTOOL  $@ $<
 
