@@ -43,10 +43,11 @@ RPMDIR		  = dist
 
 INIT_CFLAGS        ::= ${CFLAGS}
 INIT_LIBFLAGS      ::= ${LDFLAGS}
-HUNSPELL_CFLAGS    ::= $(shell pkg-config --cflags hunspell 2> /dev/null || echo) 
+HUNSPELL_CFLAGS    ::= $(shell pkg-config --cflags hunspell 2> /dev/null || echo)
 HUNSPELL_LIBFLAGS  ::= $(shell pkg-config --libs hunspell 2> /dev/null || echo) 
-XCFLAGS	  	     = ${INIT_CFLAGS} $(KNO_CFLAGS} ${HUNSPELL_CFLAGS}
-XLIBFLAGS	     = ${INIT_LIBFLAGS} $(KNO_LIBFLAGS} ${HUNSPELL_LIBFLAGS}
+
+XCFLAGS	  	     = $(INIT_CFLAGS) $(KNO_CFLAGS) $(HUNSPELL_CFLAGS)
+XLIBFLAGS	     = $(INIT_LIBFLAGS) $(KNO_LIBFLAGS) $(HUNSPELL_LIBFLAGS)
 
 %.o: %.c
 	@$(CC) $(CFLAGS) -D_FILEINFO="\"$(shell u8_fileinfo ./$< $(dirname $(pwd))/)\"" -o $@ -c $<
@@ -70,11 +71,6 @@ TAGS: hunspell.c
 
 ${CMODULES} ${DATADIR}:
 	install -d $@
-
-install: build ${CMODULES} ${DATADIR}
-	${SUDO} u8_install_shared ${PKG_NAME}.${libsuffix} ${CMODULES} ${FULL_VERSION} "${SYSINSTALL}"
-	@${SUDO} ${SYSINSTALL} data/*.dic ${DATADIR}
-	@echo === Installed ${DATADIR}/hyph_en_US.dic
 
 clean:
 	rm -f *.o ${PKG_NAME}/*.o *.${libsuffix}

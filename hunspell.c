@@ -26,49 +26,121 @@
 #include <hunspell.h>
 
 #define kno_hunspeller_type 0x888
+
 static lispval hunspeller_typetag;
 
-struct KNO_HUNSPELLER {
-  Hunhandle *hun_handle;
-  u8_text_encoding dict_encoding;} *kno_hunspeller;
+u8_condition HunspellError=_("Hunspell library error");
+
+typedef struct KNO_HUNSPELLER {
+  Hunhandle *c_handle;
+  u8_string dict_path;
+  struct U8_TEXT_ENCODING *dict_encoding;} *kno_hunspeller;
 
 u8_string default_hunspell_dir;
+
+#ifndef CSTRING
+#define CSTRING KNO_CSTRING
+#endif
+#ifndef CSTRLEN
+#define CSTRLEN KNO_STRLEN
+#endif
+#ifndef PNAME
+#define PNAME KNO_SYMBOL_NAME
+#endif
 
 KNO_EXPORT int kno_init_hunspell(void) KNO_LIBINIT_FN;
 
 static void recycle_hunspeller(void *ptr)
 {
   struct KNO_HUNSPELLER *kh = (kno_hunspeller) ptr;
-  Hunspell_destroy(kh->hun_handle);
+  Hunspell_destroy(kh->c_handle);
+  if (kh->dict_path) u8_free(kh->dict_path);
   u8_free(kh);
 }
 
-static lispval hunspell_open(lispval path,lispval opts,lispval custom)
+u8_string get_hunspell_prefix(lispval arg,lispval opts)
 {
-  lispval prefix = KNO_CSTRING(path);
+  if (KNO_STRINGP(arg))
+    return u8_strdup(CSTRING(arg));
+  else if (KNO_SYMBOLP(arg)) {
+    lispval config_val = kno_config_get(PNAME(arg));
+    if (VOIDP(config_val)) return NULL;
+    else if (STRINGP(config_val))
+      return u8_strdup(CSTRING(arg));
+    else {
+      u8_log(LOGWARN,"BadConfigPath",
+	     "Bad config value %q for hunspell path spec %q",
+	     config_val,arg);
+      kno_decref(config_val);
+      return NULL;}}
+  else return NULL;
+}
+
+DEFC_PRIM("hunspell/open",hunspell_open_prim,
+	  KNO_MAX_ARGS(3)|KNO_MIN_ARGS(1),
+	  "Opens a hunspell analyzer for a particular dictionary",
+	  {"path",kno_any_type,KNO_VOID},
+	  {"opts",kno_opts_type,KNO_FALSE},
+	  {"custom",kno_any_type,KNO_FALSE})
+static lispval hunspell_open_prim(lispval path,lispval opts,lispval custom)
+{
+  u8_string prefix = get_hunspell_prefix(path,opts);
+  if (prefix == NULL)
+    return kno_err(HunspellError,"hunspell_open_prim",NULL,path);
   u8_string affpath = u8_string_append(prefix,".aff",NULL);
   u8_string dicpath = u8_string_append(prefix,".dic",NULL);
   lispval keyopt = kno_getopt(opts,KNOSYM_KEY,KNO_VOID);
-  char *dict_key = (KNO_PACKETP(keyopt)) ? (KNO_PACKET_DATA(keypot)) :
-    (KNO_STRINGP(keyopt)) ? (KNO_CSTRING(keypot)) : (NULL);
-  Hunhandle *h = (dictkey) ?
+  const char *dict_key = (KNO_PACKETP(keyopt)) ? (KNO_PACKET_DATA(keyopt)) :
+    (KNO_STRINGP(keyopt)) ? (KNO_CSTRING(keyopt)) : (NULL);
+  Hunhandle *h = (dict_key) ?
     (Hunspell_create_key(affpath,dicpath,dict_key)) :
-    (Hunspell_create(affpath,dpath));
-  if (h == NULL) {}
+    (Hunspell_create(affpath,dicpath));
+  if (h == NULL) {
+    kno_decref(keyopt);
+    return kno_err(HunspellError,"hunspell_open_prim",CSTRING(path),opts);}
+
   char *encname = Hunspell_get_dic_encoding(h);
-  u8_text_encoding enc = u8_get_encoding(encname);
+  u8_encoding enc = (encname) ? (u8_get_encoding(encname)) : (NULL);
+
+  if (!( (KNO_VOIDP(custom)) || (KNO_FALSEP(custom)) || (KNO_DEFAULTP(custom)) )) {
+    // TODO: Add type warnings
+    KNO_DO_CHOICES(add,custom) {
+      if (KNO_STRINGP(add)) {
+	int rv;
+	if (enc) {
+	  const char *dict_string =
+	    u8_localize_string(enc,CSTRING(add),CSTRING(add)+CSTRLEN(add));
+	  rv=Hunspell_add(h,dict_string);}
+	else rv=Hunspell_add(h,(const char *) u8_strdup(CSTRING(add)));
+	if (rv<0) u8_log(LOGWARN,"Hunspell/AddFailed",prefix,add);}
+      else if (KNO_TABLEP(add)) {
+	lispval keys = kno_getkeys(add);
+	KNO_DO_CHOICES(key,keys) {
+	  if (KNO_STRINGP(key)) {
+	    lispval val = kno_get(add,key,KNO_VOID);
+	    if (KNO_STRINGP(val)) {
+	      char *dict_string = (enc==NULL) ? (u8_strdup(CSTRING(key))) :
+		u8_localize_string(enc,CSTRING(key),CSTRING(key)+CSTRLEN(key));
+	      char *affix_string = (enc==NULL) ? (u8_strdup(CSTRING(val))) :
+		u8_localize_string(enc,CSTRING(val),CSTRING(val)+CSTRLEN(val));
+	      int rv = Hunspell_add_with_affix(h,dict_string,affix_string);}
+	    kno_decref(val);}}
+	kno_decref(keys);}
+      else NO_ELSE;}}
+
   struct KNO_HUNSPELLER *kh = u8_alloc(struct KNO_HUNSPELLER);
-  kh->hun_handle = h;
+  kh->c_handle = h;
+  kh->dict_path = prefix;
   kh->dict_encoding = enc;
   return kno_wrap_pointer(kh,sizeof(struct KNO_HUNSPELLER),
 			  recycle_hunspeller,
 			  hunspeller_typetag,
-			  id);
+			  prefix);
 }
 
 static lispval convert_stringlist(u8_encoding enc,
-				  int n,char ***strings,
-				  int as_choice)
+				  int n,char **strings,
+				  int sorted)
 {
   lispval each[n], result;
   int i = 0; while (i<n) {
@@ -78,12 +150,60 @@ static lispval convert_stringlist(u8_encoding enc,
       each[i]=kno_init_string(NULL,-1,converted);}
     else each[i]=knostring(strings[i]);
     i++;}
-  if (as_vec)
+  if (sorted)
     return kno_make_vector(n,each);
   else return kno_make_choice(n,each,KNO_CHOICE_ISCONSES|KNO_CHOICE_DOSORT);
 }
 
+typedef int (*hunspellfn)(Hunhandle *h,char ***,const char *);
 
+lispval hunspell_wrapper(hunspellfn hunspell_fn,
+			 lispval hs,lispval term,lispval sorted,
+			 u8_context caller)
+{
+  kno_hunspeller kh = (kno_hunspeller) hs;
+  const char *dict_string = (kh->dict_encoding) ?
+    (u8_localize_string
+     (kh->dict_encoding,CSTRING(term),CSTRING(term)+CSTRLEN(term))) :
+    ((unsigned char *)(CSTRING(term)));
+  char **stringlist = NULL;
+  int n = hunspell_fn(kh->c_handle,&stringlist,dict_string);
+  if (kh->dict_encoding) u8_free(dict_string);
+  if (n<0) {
+    return kno_err(HunspellError,caller,kh->dict_path,term);}
+  lispval result = convert_stringlist
+    (kh->dict_encoding,n,stringlist,(KNO_FALSEP(sorted)));
+  Hunspell_free_list(kh->c_handle,&stringlist,n);
+  return result;
+}
+
+DEFC_PRIM("hunspell-stem",hunspell_stem_prim,
+	  KNO_MAX_ARGS(3)|KNO_MIN_ARGS(2),
+	  "Returns the stem of *term* provided by *hunspell*. "
+	  "Returns a vector if *sorted* is provided and not false, otherwise "
+	  "returns a choice of string values.",
+	  {"hunspell",kno_hunspeller_type,KNO_VOID},
+	  {"term",kno_string_type,KNO_FALSE},
+	  {"sorted",kno_any_type,KNO_FALSE})
+static lispval hunspell_stem_prim(lispval hs,lispval term,lispval sorted)
+{
+  return hunspell_wrapper(Hunspell_stem,hs,term,sorted,
+			  "hunspell_stem_prim");
+}
+
+DEFC_PRIM("hunspell-analyze",hunspell_analyze_prim,
+	  KNO_MAX_ARGS(3)|KNO_MIN_ARGS(2),
+	  "Returns a morphological analysis of *term* provided by *hunspell*. "
+	  "Returns a vector if *sorted* is provided and not false, otherwise "
+	  "returns a choice of string values.",
+	  {"hunspell",kno_hunspeller_type,KNO_VOID},
+	  {"term",kno_string_type,KNO_FALSE},
+	  {"sorted",kno_any_type,KNO_FALSE})
+static lispval hunspell_analyze_prim(lispval hs,lispval term,lispval sorted)
+{
+  return hunspell_wrapper(Hunspell_analyze,hs,term,sorted,
+			  "hunspell_analyze_prim");
+}
 
 /* suggest(suggestions, word) - search suggestions
  * input: pointer to an array of strings pointer and the (bad) word
@@ -92,23 +212,24 @@ static lispval convert_stringlist(u8_encoding enc,
  *   a newly allocated array of strings (*slts will be NULL when number
  *   of suggestion equals 0.)
  */
+/*
 LIBHUNSPELL_DLL_EXPORTED int Hunspell_suggest(Hunhandle* pHunspell,
                                               char*** slst,
-                                              const char* word);
+					      const char* word); */
 
 /* morphological functions */
 
 /* analyze(result, word) - morphological analysis of the word */
 
-LIBHUNSPELL_DLL_EXPORTED int Hunspell_analyze(Hunhandle* pHunspell,
+/*LIBHUNSPELL_DLL_EXPORTED int Hunspell_analyze(Hunhandle* pHunspell,
                                               char*** slst,
-                                              const char* word);
+					      const char* word); */
 
 /* stem(result, word) - stemmer function */
 
-LIBHUNSPELL_DLL_EXPORTED int Hunspell_stem(Hunhandle* pHunspell,
+/* LIBHUNSPELL_DLL_EXPORTED int Hunspell_stem(Hunhandle* pHunspell,
                                            char*** slst,
-                                           const char* word);
+					   const char* word); */
 
 /* stem(result, analysis, n) - get stems from a morph. analysis
  * example:
@@ -117,37 +238,28 @@ LIBHUNSPELL_DLL_EXPORTED int Hunspell_stem(Hunhandle* pHunspell,
  * int n2 = Hunspell_stem2(result2, result, n1);
  */
 
-LIBHUNSPELL_DLL_EXPORTED int Hunspell_stem2(Hunhandle* pHunspell,
+/* LIBHUNSPELL_DLL_EXPORTED int Hunspell_stem2(Hunhandle* pHunspell,
                                             char*** slst,
                                             char** desc,
-                                            int n);
+					    int n); */
 
 /* generate(result, word, word2) - morphological generation by example(s) */
 
 static lispval hunspell_module;
 
+long long hunspell_initialized = 0;
+
+
 KNO_EXPORT int kno_init_hunspell()
 {
-  if (hunspell_init) return 0;
+  if (hunspell_initialized) return 0;
+  else hunspell_initialized = u8_millitime();
 
-  hunspell_init = u8_millitime();
+  hunspeller_typetag = kno_intern("%HUNSPELLER");
 
   kno_register_config("HUNSPELL:DATA","Where the hunspell module gets its data",
 		      kno_sconfig_get,kno_sconfig_set,
 		      &default_hunspell_dir);
-
-  
-  if (default_hyphenation_file)
-    default_dict = hnj_hyphen_load(default_hyphenation_file);
-  else {
-    u8_string dictfile = u8_mkpath(KNO_DATA_DIR,"hyph_en_US.dic");
-    if (u8_file_existsp(dictfile))
-      default_dict = hnj_hyphen_load(dictfile);
-    else {
-      u8_log(LOG_CRIT,kno_FileNotFound,
-	     "Hyphenation dictionary %s does not exist!",
-	     dictfile);}
-    u8_free(dictfile);}
 
   hunspell_module = kno_new_cmodule("hunspell",0,kno_init_hunspell);
 
@@ -162,4 +274,7 @@ KNO_EXPORT int kno_init_hunspell()
 
 static void link_local_cprims()
 {
+  KNO_LINK_CPRIM("hunspell/open",hunspell_open_prim,3,hunspell_module);
+  KNO_LINK_CPRIM("hunspell-stem",hunspell_stem_prim,3,hunspell_module);
+  KNO_LINK_CPRIM("hunspell-analyze",hunspell_stem_prim,3,hunspell_module);
 }
