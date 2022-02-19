@@ -22,6 +22,7 @@ PATCH_VERSION   ::= ${FULL_VERSION}-${PATCHLEVEL}
 
 PKG_NAME	::= hunspell
 DPKG_NAME	::= ${PKG_NAME}_${PATCH_VERSION}
+LIB_NAME	  = hunspeller
 
 SUDO            ::= $(shell which sudo)
 
@@ -50,27 +51,32 @@ XCFLAGS	  	     = $(INIT_CFLAGS) $(KNO_CFLAGS) $(HUNSPELL_CFLAGS)
 XLIBFLAGS	     = $(INIT_LIBFLAGS) $(KNO_LIBFLAGS) $(HUNSPELL_LIBFLAGS)
 
 %.o: %.c
-	@$(CC) $(CFLAGS) -D_FILEINFO="\"$(shell u8_fileinfo ./$< $(dirname $(pwd))/)\"" -o $@ -c $<
+	@$(CC) $(CFLAGS) $(XCFLAGS} -D_FILEINFO="\"$(shell u8_fileinfo ./$< $(dirname $(pwd))/)\"" -o $@ -c $<
 	@$(MSG) CC $@ $<
 
-default build: ${PKG_NAME}.${libsuffix}
+default build: ${LIB_NAME}.${libsuffix}
 
-hunspell.so: hunspell.c makefile
-	@$(MKSO) $(XCFLAGS) -o $@ hunspell.c -lhunspell
+hunspeller.so: hunspeller.c makefile
+	@$(MKSO) $(XCFLAGS) -o $@ hunspeller.c ${XLIBFLAGS}
 	@$(MSG) MKSO  $@ $< ${XLIBFLAGS}
 	@ln -sf $(@F) $(@D)/$(@F).${KNO_MAJOR}
-hunspell.dylib: hunspell.c
+hunspeller.dylib: hunspeller.c
 	@$(MACLIBTOOL) -install_name \
 		`basename $(@F) .dylib`.${KNO_MAJOR}.dylib \
 		${CFLAGS} -o $@ $(DYLIB_FLAGS) ${XLIBFLAGS} \
-		hunspell.c
+		hunspeller.c
 	@$(MSG) MACLIBTOOL  $@ $<
 
-TAGS: hunspell.c
-	etags -o TAGS hunspell.c
+TAGS: hunspeller.c
+	etags -o TAGS hunspeller.c makefile
 
 ${CMODULES} ${DATADIR}:
 	install -d $@
+
+install: build ${CMODULES} ${DATADIR}
+	@${SUDO} u8_install_shared ${LIB_NAME}.${libsuffix} ${CMODULES} ${FULL_VERSION} "${SYSINSTALL}"
+	@${SUDO} ${SYSINSTALL} en_US.aff en_US.dic ${DATADIR}
+	@echo === Installed ${DATADIR}/en_US dictionary and affix files
 
 clean:
 	rm -f *.o ${PKG_NAME}/*.o *.${libsuffix}
